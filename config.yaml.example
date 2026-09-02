@@ -1,0 +1,37 @@
+# GitClonePro Configuration
+# Copy to ~/.gitclone_config.yaml or ./config.yaml
+
+# GitHub Personal Access Token (generate at https://github.com/settings/tokens)
+# Required for private repos and to avoid rate limits
+github_token: "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Default clone directory (if not specified via -d)
+clone_dir: "~/git_clones"
+
+# Default branch to clone
+default_branch: "main"
+
+# Number of retry attempts on failure
+retries: 3
+
+# Maximum threads for batch cloning
+threads: 4
+
+# Timeout in seconds for API requests
+timeout: 30
+
+# Verbose output (true/false)
+verbose: true
+
+# Logging settings
+log_file: "~/.gitclone.log"
+log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+
+# SSH settings
+use_ssh: false  # Use SSH instead of HTTPS (requires SSH keys)
+
+# Sparse checkout settings
+sparse_checkout_use_git: true  # Use git sparse-checkout (faster) vs manual
+
+# Security
+validate_certificates: true

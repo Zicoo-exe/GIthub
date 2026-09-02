@@ -1,0 +1,4 @@
+pyyaml>=5.4
+requests>=2.25
+tqdm>=4.62
+colorama>=0.4

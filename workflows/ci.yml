@@ -1,0 +1,567 @@
+name: 🔄 CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'feature/*'
+      - 'hotfix/*'
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - develop
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly security scan on Sunday
+
+env:
+  PYTHON_VERSION: '3.10'
+  POETRY_VERSION: '1.4.2'
+
+jobs:
+  # ============ JOB 1: Code Quality & Linting ============
+  lint:
+    name: 🧹 Code Quality
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.8', '3.9', '3.10', '3.11']
+    
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: 🐍 Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+        cache-dependency-path: |
+          requirements.txt
+          setup.py
+
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .
+        pip install \
+          black==23.11.0 \
+          flake8==6.1.0 \
+          isort==5.12.0 \
+          mypy==1.7.0 \
+          bandit==1.7.5 \
+          pylint==3.0.2 \
+          pydocstyle==6.3.0
+
+    - name: 🎨 Check formatting with Black
+      run: |
+        black --check gitclone/
+        black --check tests/
+
+    - name: 📋 Check import sorting with isort
+      run: |
+        isort --check-only --profile black gitclone/
+        isort --check-only --profile black tests/
+
+    - name: 🔍 Lint with flake8
+      run: |
+        flake8 gitclone/ \
+          --max-line-length=100 \
+          --extend-ignore=E203,W503 \
+          --count \
+          --statistics \
+          --show-source
+        flake8 tests/ \
+          --max-line-length=100 \
+          --extend-ignore=E203,W503 \
+          --count \
+          --statistics \
+          --show-source
+
+    - name: 🧪 Type check with mypy
+      run: |
+        mypy gitclone/ \
+          --ignore-missing-imports \
+          --show-error-codes \
+          --warn-unused-ignores \
+          --warn-redundant-casts \
+          --warn-unused-configs
+        mypy tests/ \
+          --ignore-missing-imports \
+          --show-error-codes
+
+    - name: 🔒 Security scan with bandit
+      run: |
+        bandit -r gitclone/ \
+          -f json \
+          -o bandit-report.json \
+          -ll \
+          -x tests/
+      continue-on-error: false
+
+    - name: 📤 Upload bandit report
+      uses: actions/upload-artifact@v4
+      with:
+        name: bandit-report-${{ matrix.python-version }}
+        path: bandit-report.json
+
+    - name: 📝 Docstring check with pydocstyle
+      run: |
+        pydocstyle gitclone/ \
+          --convention=google \
+          --add-ignore=D100,D104,D107
+
+    - name: 🏗️ Package build check
+      run: |
+        pip install build
+        python -m build
+
+  # ============ JOB 2: Unit Tests ============
+  test:
+    name: 🧪 Unit Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.8', '3.9', '3.10', '3.11']
+        exclude:
+          - os: windows-latest
+            python-version: '3.8'
+          - os: macos-latest
+            python-version: '3.8'
+    
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v4
+
+    - name: 🐍 Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .
+        pip install \
+          pytest==7.4.3 \
+          pytest-cov==4.1.0 \
+          pytest-xdist==3.5.0 \
+          pytest-timeout==2.2.0 \
+          pytest-mock==3.12.0 \
+          mock==5.1.0
+
+    - name: 🔧 Install Git (for Windows)
+      if: runner.os == 'Windows'
+      uses: actions/checkout@v4
+      
+    - name: 🧪 Run tests with coverage
+      run: |
+        pytest tests/ \
+          --cov=gitclone \
+          --cov-report=xml \
+          --cov-report=html \
+          --cov-report=term \
+          --cov-branch \
+          -n auto \
+          --timeout=60 \
+          -v
+      
+    - name: 📊 Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-${{ matrix.os }}-py${{ matrix.python-version }}
+        fail_ci_if_error: false
+
+    - name: 📤 Upload test results
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results-${{ matrix.os }}-${{ matrix.python-version }}
+        path: |
+          coverage.xml
+          htmlcov/
+          .pytest_cache/
+        if-no-files-found: ignore
+
+    - name: 📤 Upload coverage HTML
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-html-${{ matrix.os }}
+        path: htmlcov/
+        if-no-files-found: ignore
+
+  # ============ JOB 3: Integration Tests ============
+  integration:
+    name: 🌐 Integration Tests
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10']
+    
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v4
+
+    - name: 🐍 Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .
+        pip install pytest pytest-cov pytest-xdist
+
+    - name: 🔧 Install Git
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git
+
+    - name: 🔑 Set up SSH (for integration tests)
+      run: |
+        mkdir -p ~/.ssh
+        ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+        chmod 644 ~/.ssh/known_hosts
+
+    - name: 🧪 Run integration tests
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITCLONE_TEST_INTEGRATION: true
+      run: |
+        pytest tests/test_integration.py \
+          -v \
+          --cov=gitclone \
+          --cov-append \
+          --timeout=120
+
+    - name: 📤 Upload integration test results
+      uses: actions/upload-artifact@v4
+      with:
+        name: integration-results
+        path: integration-results/
+        if-no-files-found: ignore
+
+  # ============ JOB 4: Security Scanning ============
+  security:
+    name: 🔒 Security Scan
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    if: github.event_name == 'push'
+    
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v4
+
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .
+        pip install safety==2.3.5 pip-audit==2.6.1
+
+    - name: 🔍 Check dependencies for vulnerabilities (safety)
+      run: |
+        safety check \
+          --full-report \
+          --json \
+          --output safety-report.json \
+          --policy-file .safety-policy.yml
+      continue-on-error: false
+
+    - name: 🔍 Check dependencies (pip-audit)
+      run: |
+        pip-audit \
+          --requirement requirements.txt \
+          --desc \
+          --format json \
+          --output pip-audit.json
+      continue-on-error: true
+
+    - name: 📤 Upload security reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-reports
+        path: |
+          safety-report.json
+          pip-audit.json
+        if-no-files-found: ignore
+
+    - name: 🔒 Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: 📤 Upload Trivy results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  # ============ JOB 5: Performance Benchmarks ============
+  benchmark:
+    name: ⚡ Performance Benchmarks
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v4
+
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .
+        pip install pytest-benchmark==4.0.0
+
+    - name: 🏃 Run benchmarks
+      run: |
+        pytest tests/test_benchmark.py \
+          --benchmark-only \
+          --benchmark-json=benchmark-results.json
+
+    - name: 📤 Upload benchmark results
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-results
+        path: benchmark-results.json
+        if-no-files-found: ignore
+
+  # ============ JOB 6: Documentation Build ============
+  docs:
+    name: 📚 Build Documentation
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v4
+
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .
+        pip install mkdocs mkdocs-material pymdown-extensions
+
+    - name: 📖 Build documentation
+      run: |
+        mkdocs build --site-dir site
+
+    - name: 📤 Upload documentation
+      uses: actions/upload-artifact@v4
+      with:
+        name: docs-site
+        path: site/
+        if-no-files-found: ignore
+
+  # ============ JOB 7: Deploy Documentation ============
+  deploy-docs:
+    name: 🌐 Deploy Documentation
+    runs-on: ubuntu-latest
+    needs: docs
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    
+    steps:
+    - name: 📥 Download documentation artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: docs-site
+        path: site
+
+    - name: 📤 Upload to GitHub Pages
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: site
+
+    - name: 🚀 Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
+
+  # ============ JOB 8: Package Build & Publish ============
+  publish:
+    name: 📦 Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [lint, test, security, integration]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+      id-token: write
+    
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+
+    - name: 📦 Install build tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install build twine setuptools wheel
+
+    - name: 🏗️ Build package
+      run: |
+        python -m build
+        twine check dist/*
+
+    - name: 📤 Publish to PyPI (main)
+      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        password: ${{ secrets.PYPI_API_TOKEN }}
+        packages-dir: dist/
+        verbose: true
+
+    - name: 📤 Publish to Test PyPI (dry run)
+      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        password: ${{ secrets.PYPI_API_TOKEN }}
+        repository-url: https://test.pypi.org/legacy/
+        packages-dir: dist/
+        verbose: true
+
+    - name: 📄 Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          dist/*.whl
+          dist/*.tar.gz
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 📤 Upload distribution files
+      uses: actions/upload-artifact@v4
+      with:
+        name: dist-files
+        path: dist/
+        if-no-files-found: error
+
+  # ============ JOB 9: Notifications ============
+  notify:
+    name: 📢 Notifications
+    runs-on: ubuntu-latest
+    needs: [publish, deploy-docs, benchmark, security]
+    if: always()
+    
+    steps:
+    - name: 📢 Send status to Discord
+      if: github.event_name == 'push'
+      uses: sarisia/actions-status-discord@v1
+      with:
+        webhook: ${{ secrets.DISCORD_WEBHOOK }}
+        status: ${{ job.status }}
+        title: "GitClonePro CI/CD Status"
+        description: |
+          **Repository:** ${{ github.repository }}
+          **Branch:** ${{ github.ref_name }}
+          **Commit:** ${{ github.sha }}
+          **Event:** ${{ github.event_name }}
+          **Status:** ${{ needs.publish.result || 'failed' }}
+
+    - name: 📢 Send Slack notification
+      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+      uses: slackapi/slack-github-action@v1.24.0
+      with:
+        channel-id: 'C0123456789'
+        slack-message: |
+          *GitClonePro CI/CD Pipeline*
+          - Status: ${{ job.status }}
+          - Commit: ${{ github.sha }}
+          - Author: ${{ github.actor }}
+          - URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      env:
+        SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
+  # ============ JOB 10: Code Quality Gate ============
+  quality-gate:
+    name: ✅ Quality Gate
+    runs-on: ubuntu-latest
+    needs: [lint, test, security, integration]
+    if: always()
+    
+    steps:
+    - name: 📊 Check quality metrics
+      run: |
+        echo "🔍 Checking quality gate..."
+        
+        # Check if any job failed
+        if [ "${{ needs.lint.result }}" != "success" ]; then
+          echo "❌ Linting failed!"
+          exit 1
+        fi
+        
+        if [ "${{ needs.test.result }}" != "success" ]; then
+          echo "❌ Tests failed!"
+          exit 1
+        fi
+        
+        if [ "${{ needs.security.result }}" != "success" ]; then
+          echo "❌ Security scan failed!"
+          exit 1
+        fi
+        
+        if [ "${{ needs.integration.result }}" != "success" ]; then
+          echo "❌ Integration tests failed!"
+          exit 1
+        fi
+        
+        echo "✅ All quality gates passed!"
+
+    - name: 📊 Show coverage summary
+      run: |
+        echo "📊 Coverage Summary:"
+        echo "===================="
+        if [ -f "coverage.xml" ]; then
+          COVERAGE=$(python -c "import xml.etree.ElementTree as ET; tree=ET.parse('coverage.xml'); root=tree.getroot(); print(root.find('sources').find('source').text)")
+          echo "Coverage file found!"
+        else
+          echo "⚠️ Coverage file not found"
+        fi

@@ -1,0 +1,17 @@
+include README.md
+include LICENSE
+include config.yaml.example
+include requirements.txt
+
+recursive-include gitclone *.py
+recursive-include tests *.py
+recursive-include examples *.sh *.py
+recursive-include scripts *.sh
+
+exclude *.pyc
+exclude *.pyo
+exclude *.orig
+exclude .git*
+exclude .DS_Store
+exclude .vscode
+exclude .idea
